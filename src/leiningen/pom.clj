@@ -75,8 +75,8 @@
   [url]
   (if url
     (next
-     (or (re-matches #"(?:[A-Za-z_]{2,}@)?github.com:([^/]+)/([^/]+).git" url)
-         (re-matches #"[^:]+://(?:[A-Za-z_]{2,}@)?github.com/([^/]+)/([^/]+).git" url)))))
+     (or (re-matches #"(?:[A-Za-z-]{2,}@)?github.com:([^/]+)/([^/]+).git" url)
+         (re-matches #"[^:]+://(?:[A-Za-z-]{2,}@)?github.com/([^/]+)/([^/]+).git" url)))))
 
 (defn- github-urls [url]
   (if-let [[user repo] (parse-github-url url)]
@@ -330,6 +330,7 @@
                             (project/unmerge-profiles profile-kws)
                             (project/merge-profiles [:test])
                             relativize)
+           managed-deps (:managed-dependencies test-project)
            deps (:dependencies test-project)]
        (list
         [:project {:xsi:schemaLocation
@@ -354,6 +355,8 @@
          ;; TODO: this results in lots of duplicate entries
          (xml-tags :build [project test-project])
          (xml-tags :repositories (:repositories project))
+         (xml-tags :dependencyManagement
+                   (xml-tags :dependencies (distinct-key dep-key managed-deps)))
          (xml-tags :dependencies (distinct-key dep-key deps))
          (and (:pom-addition project) (:pom-addition project))]))))
 
