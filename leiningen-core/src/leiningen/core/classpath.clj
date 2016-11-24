@@ -382,7 +382,7 @@
         (doseq [r ranges]
           (warn r)))
       (warn "\nConsider using these exclusions:")
-      (doseq [ex exclusions]
+      (doseq [ex (distinct exclusions)]
         (warn ex))
       (warn))))
 
@@ -539,7 +539,7 @@
   vector in the place where the version string should be."
   [dep]
   ;; Some plugins may replace a keyword with a version string later on, so
-  ;; assume that even lenght vectors are alright. If not, then they will blow up
+  ;; assume that even length vectors are alright. If not, then they will blow up
   ;; at a later stage.
   (if (even? (count dep))
     dep

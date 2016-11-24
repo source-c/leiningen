@@ -1,5 +1,9 @@
 # Leiningen News -- history of user-visible changes
 
+## 2.7.2 / ???
+
+* Remove duplicate exclusions in `lein deps` (Emlyn Corrin)
+
 ## 2.7.1 / 2016-09-22
 
 * Add support for SDKMAN! as installation alternative. (Jean Niklas L'orange)
