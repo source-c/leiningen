@@ -4,12 +4,12 @@
   (:require [clojure.walk :as walk]
             [clojure.java.io :as io]
             [clojure.set :as set]
-            [clojure.string :as s]
             [cemerick.pomegranate :as pomegranate]
             [cemerick.pomegranate.aether :as aether]
             [leiningen.core.utils :as utils]
             [leiningen.core.user :as user]
-            [leiningen.core.classpath :as classpath])
+            [leiningen.core.classpath :as classpath]
+            [clojure.string :as str])
   (:import (clojure.lang DynamicClassLoader)
            (java.io PushbackReader Reader)))
 
@@ -48,10 +48,22 @@
   [profile]
   (vector? profile))
 
+(defn group-id
+  [id]
+  (if (string? id)
+    (first (str/split id #"/"))
+    (or (namespace id) (name id))))
+
+(defn artifact-id
+  [id]
+  (if (string? id)
+    (last (str/split id #"/"))
+    (name id)))
+
 (defn artifact-map
   [id]
-  {:artifact-id (name id)
-   :group-id (or (namespace id) (name id))})
+  {:artifact-id (artifact-id id)
+   :group-id (group-id id)})
 
 (defn exclusion-map
   "Transform an exclusion vector into a map that is easier to combine with
@@ -454,11 +466,38 @@
   (.toString (BigInteger. 1 (-> (java.security.MessageDigest/getInstance "SHA1")
                                 (.digest (.getBytes content)))) 16))
 
+(defn- keyword-composite-profile? [profile]
+  (and (composite-profile? profile) (every? keyword? profile)))
+
+(defn- ordered-keyword-composite-profiles [project]
+  (->> project meta :profiles
+       (filter (comp keyword-composite-profile? val))
+       (remove (comp empty? val))
+       (sort-by count)
+       (reverse)))
+
+(defn- first-matching-composite [profiles composites]
+  (->> composites
+       (filter (fn [[_ v]] (= v (take (count v) profiles))))
+       (first)))
+
+(defn- normalize-profile-names [project profiles]
+  (let [composites (ordered-keyword-composite-profiles project)]
+    (loop [profiles'  profiles
+           normalized ()]
+      (if (seq profiles')
+        (if-let [[k v] (first-matching-composite profiles' composites)]
+          (recur (drop (count v) profiles') (cons k normalized))
+          (recur (rest profiles') (cons (first profiles') normalized)))
+        (if (= (count profiles) (count normalized))
+          profiles
+          (normalize-profile-names project (reverse normalized)))))))
+
 (defn profile-scope-target-path [project profiles]
   (let [n #(if (map? %) (subs (sha1 (pr-str %)) 0 8) (name %))]
     (if (:target-path project)
       (update-in project [:target-path] format
-                 (s/join "+" (map n (remove #{:default :provided} profiles))))
+                 (str/join "+" (map n (normalize-profile-names project profiles))))
       project)))
 
 (defn target-path-subdirs [{:keys [target-path] :as project} key]
@@ -480,10 +519,21 @@
 ;; compilation, so if they've done that we should do the same for project JVMs
 (def tiered-jvm-opts
   (if (.contains (or (System/getenv "LEIN_JVM_OPTS") "") "Tiered")
-    ["-XX:+TieredCompilation" "-XX:TieredStopAtLevel=1"
-     "-XX:-OmitStackTraceInFastThrow"]
-    ["-XX:-OmitStackTraceInFastThrow"]))
+    ["-XX:+TieredCompilation" "-XX:TieredStopAtLevel=1"]))
 
+;; give reasonable -Xmx defaults when containerized, if JVM is new enough
+;; https://blogs.oracle.com/java-platform-group/java-se-support-for-docker-cpu-and-memory-limits
+(def ^:private cgroups-jvm-opts
+  ;; this assumes the JVM version Leiningen is run under matches the project
+  (let [[v u] (re-seq #"[^-_]+" (System/getProperty "java.runtime.version"))]
+    (if (or (and (= v "1.8.0") (>= (Integer. u) 131))
+            (not= v "1.7.0")
+            (not= v "1.6.0"))
+      ["-XX:+UnlockExperimentalVMOptions" "-XX:+UseCGroupMemoryLimitForHeap"])))
+
+(def default-jvm-opts
+  [;; actually does the opposite; omits trace unless this is set
+   "-XX:-OmitStackTraceInFastThrow"])
 
 (def default-profiles
   "Profiles get merged into the project map. The :dev, :provided, and :user
@@ -491,7 +541,9 @@
   (atom {:default [:leiningen/default]
          :leiningen/default [:base :system :user :provided :dev]
          :base {:resource-paths ^:default-path/dev-resources ["dev-resources"]
-                :jvm-opts (with-meta tiered-jvm-opts
+                :jvm-opts (with-meta `[~@default-jvm-opts
+                                       ~@tiered-jvm-opts
+                                       ~@cgroups-jvm-opts]
                             {:displace true})
                 :test-selectors {:default (with-meta '(constantly true)
                                             {:displace true})}
@@ -1002,7 +1054,7 @@ Also initializes the project; see read-raw for a version that skips init."
   dependencies."
   [project]
   (for [dep (.listFiles (io/file (:root project) "checkouts"))
-        :let [project-file (io/file dep "project.clj")
+        :let [project-file (.getCanonicalFile (io/file dep "project.clj"))
               checkout-project (read-dependency-project project-file)]
         :when checkout-project]
     checkout-project))

@@ -5,7 +5,8 @@
             [leiningen.core.utils :refer [platform-nullsink]]
             [leiningen.test.helper :as helper]
             [robert.hooke :as hooke]
-            [leiningen.javac :as javac])
+            [leiningen.javac :as javac]
+            [leiningen.test.helper :refer [unmemoize]])
   (:use [clojure.test]
         [leiningen.jar]))
 
@@ -92,6 +93,8 @@
         "jar produces two jar files")))
 
 (deftest ^:online test-no-deps-jar
+  (unmemoize #'leiningen.core.classpath/get-dependencies-memoized
+             #'leiningen.core.classpath/get-dependencies*)
   (let [[coord jar-file] (first
                           (jar (dissoc helper/sample-project
                                        :dependencies :main)))]
@@ -140,9 +143,9 @@
                           "Warning: The Main-Class specified does not exist"))))))
 
 (deftest javac-launched-with-whitelisted-settings
-  (let [user-profile {:local-repo "foo/bar"
+  (let [user-profile {:local-repo "test_projects/jar/foo/bar"
                       :mirrors {"central" {:name "central"
-                                           :url "http://uk.maven.org/maven2"}}}
+                                           :url "https://maven-central.storage-download.googleapis.com/repos/central/data/"}}}
         orig-project (-> (helper/read-test-project-with-user-profiles
                           "java-main"
                           {:user user-profile}))

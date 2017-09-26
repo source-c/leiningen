@@ -34,7 +34,10 @@
 
 # Tutorial
 
-Leiningen is for automating Clojure projects without setting your hair on fire.
+Leiningen is for automating Clojure projects without setting your hair
+on fire. If you experience your hair catching on fire or any other
+frustrations while following this tutorial, please
+[let us know](https://github.com/technomancy/leiningen/issues/new).
 
 It offers various project-related tasks and can:
 
@@ -261,7 +264,9 @@ wider JVM community.
 You can add third-party repositories by setting the `:repositories` key
 in project.clj. See the
 [sample.project.clj](https://github.com/technomancy/leiningen/blob/stable/sample.project.clj)
-for examples on how to do so.
+for examples on how to do so. This sample uses additional repositories such as the Sonatype 
+repository which gives access to the latest SNAPSHOT development version of a library (Clojure or Java). 
+It also contains other relevant settings regarding repositories such as update frequency.
 
 ### Checkout Dependencies
 
@@ -335,28 +340,13 @@ Checkouts are an opt-in feature; not everyone who is working on the
 project will have the same set of checkouts, so your project should
 work without checkouts before you push or merge.
 
+Make sure not to override the `base` profile while using checkouts. In practice that usually means using `lein with-profile +foo run` rather than `lein with-profile foo run`.
+
 ### Search
 
 Leiningen supports searching remote Maven repositories for matching
-jars with the command `lein search $TERM`. The first time `lein search`
-is run, a set of indices are downloaded. Once this is finished, the query
-is evaluated as a [Lucene search](https://www.lucenetutorial.com/lucene-query-syntax.html).
-This allows for simple string matching or strings prefixed with one of the
-following operators:
-
-  * `artifact-id`, `artifact\_id`, `id`, `a`
-  * `group-id`, `group\_id`, `group`, `g`
-  * `description`, `desc`, `d`
-
-These prefixes allow you to execute more advanced queries such as:
-
-    $ lein search clojure
-    $ lein search description:crawl
-    $ lein search group:clojurewerkz
-    $ lein search \"Riak client\"
-
-`lein search` also accepts a second, optional parameter for fetching
-successive pages, e.g. `lein search clojure 2`.
+jars with the command `lein search $TERM`. Currently only searching
+Central and Clojars is supported.
 
 ## Setting JVM Options
 

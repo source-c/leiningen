@@ -5,8 +5,9 @@
             [clojure.java.shell :as shell]
             [leiningen.core.utils :as utils])
   (:import (com.hypirion.io Pipe)
+           (org.apache.commons.io.output TeeOutputStream)
            (java.util.regex Pattern)
-           (java.io InputStreamReader)))
+           (java.io ByteArrayOutputStream)))
 
 (defn getprop
   "Wrap System/getProperty for testing purposes."
@@ -24,7 +25,7 @@
   (let [lein-home (getenv "LEIN_HOME")
         lein-home (or (and lein-home (io/file lein-home))
                       (io/file (System/getProperty "user.home") ".lein"))]
-    (.getAbsolutePath (doto lein-home .mkdirs))))
+    (.getAbsolutePath (doto lein-home utils/mkdirs))))
 
 ;; TODO: move all these memoized fns into delays
 (def init
@@ -92,12 +93,12 @@
   []
   (or (getenv "LEIN_GPG") "gpg"))
 
-(defn- get-english-env []
-  "Returns environment variables as a map with clojure keywords and LANGUAGE set to 'en'"
-  (let [env (System/getenv)
-        keywords (map #(keyword %) (keys env))]
-    (merge (zipmap keywords (vals env))
-           {:LANGUAGE "en"})))
+(defn- get-english-env
+  "Returns env vars as a map with clojure keywords and LANGUAGE set to 'en'"
+  []
+  (let [env (System/getenv)]
+    (assoc (zipmap (map keyword (keys env)) (vals env))
+           :LANGUAGE "en")))
 
 (defn- as-env-strings
   [env]
@@ -113,13 +114,17 @@
       (.addShutdownHook (Runtime/getRuntime)
                         (Thread. (fn [] (.destroy proc))))
       (with-open [out (.getInputStream proc)
-                  err (.getErrorStream proc)]
-        (let [pump-err (doto (Pipe. err System/err) .start)]
+                  err-output (ByteArrayOutputStream.)]
+        (let [pump-err (doto (Pipe. (.getErrorStream proc)
+                                    (TeeOutputStream. System/err err-output))
+                         .start)]
           (.join pump-err)
           (let [exit-code (.waitFor proc)]
-            {:exit exit-code :out (slurp (InputStreamReader. out))}))))
+            {:exit exit-code
+             :out (slurp (io/reader out))
+             :err (slurp (io/reader (.toByteArray err-output)))}))))
     (catch java.io.IOException e
-      {:exit 1 :err (.getMessage e)})))
+      {:exit 1 :out "" :err (.getMessage e)})))
 
 (defn gpg-available?
   "Verifies (gpg-program) exists"

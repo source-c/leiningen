@@ -19,7 +19,9 @@
 **Q:** How should I pick my version numbers?  
 **A:** Use [semantic versioning](http://semver.org) to communicate
   intentions to downstream users of your library, but don't make
-  assumptions that libraries you use stick with it consistently.
+  assumptions that libraries you use stick with it consistently. Remember
+  that the difference between a breaking change and a bug fix is often
+  subjective.
 
 **Q:** What if my project depends on jars that aren't in any repository?  
 **A:** You will need to get them in a repository. The
@@ -98,7 +100,7 @@
   use a development cycle that involves keeping a single project REPL
   process running for as long as they're working on that project.
   Depending on your editor you may be able to do this via its Clojure
-  integration. (See [nrepl.el](https://github.com/clojure-emacs/cider) or
+  integration. (See [cider](https://github.com/clojure-emacs/cider) or
   [fireplace](https://github.com/tpope/vim-fireplace), for example.)
   Otherwise you can use the basic `lein repl`.
 
@@ -112,12 +114,6 @@
   negatively affect performance in the long run, or lead to inaccurate
   benchmarking results.  If want the JVM to fully optimize, you can
   you can switch profiles with `lein with-profiles production run ...`.
-
-**Q:** What does "Unrecognized VM option 'TieredStopAtLevel=1'" mean?  
-**A:** Old versions of the JVM do not support the directives Leiningen
-  uses for tiered compilation which allow the JVM to boot more
-  quickly. You can disable this behaviour with `export LEIN_JVM_OPTS=`
-  or upgrade your JVM to something more recent. (newer than b25 of Java 6)
 
 **Q:** I'm attempting to run a project as a background process (`lein run &`),
   but the process suspends until it is in the foreground. How do I run a program
@@ -162,24 +158,20 @@
   should rather read the `project.clj` yourself. The project map changes based
   on the task you use, and so different tasks (repl, jar, uberjar to name a few)
   will make it hard to make the testing- and production project map identical.
-  To add `project.clj` to your classpath, you can add in
-  [lein-shell](https://github.com/hyPiRion/lein-shell) and prepend `:prep-tasks`
-  with `["shell" "cp" "project.clj" "resources/project.clj"]` and read it
-  through e.g.
+  `project.clj` is added as a resource in
+  `META-INF/leiningen/group/artifact/project.clj` (replace "group" and
+  "artifact" with values appropriate to your project). You can read it as
+  follows:
 
 ```clj
-(read-string (slurp (io/resource "project.clj")))
+(read-string (slurp (io/resource "META-INF/leiningen/group/artifact/project.clj")))
 ```
 
 **Q:** I need to do AOT for an uberjar; can I avoid it during development?  
-**A:** A reasonable request. Leiningen supports isolating different
-  profiles by their target directory. Simply specify `:target-path
-  "target/%s"` in order to have each profile set use a different
-  directory for generated files. Then you can put your `:aot`
-  settings in the `:uberjar` profile, and the .class files created
-  from the AOT process will not affect normal development use. You can
-  specify the profile-isolated `:target-path` in your `:user` profile if
-  you want it applied across all the projects you work on.
+**A:** Yes, it is strongly recommended to do AOT only in the uberjar task
+  if possible. But by default the AOT'd files will still be visible during 
+  development unless you also change `:target-path` to something like
+  `"target/uberjar"` in the `:uberjar` profile as well.
 
 **Q:** Is there a way to use an uberjar without AOT?  
 **A:** As of Leiningen 2.4.0, if you omit `:main` in `project.clj`,
@@ -188,10 +180,11 @@
   arg1 arg2 [...]` without any AOT, but it will take longer to launch.
 
 **Q:** Why does `lein jar` package some namespaces from dependencies into my jar?  
-**A:** This is likely because you want to AOT-compile namespaces. Any
+**A:** This is likely because you have AOT-compiled its namespaces. An
   AOT-compiled namespace can only depend on AOT-compiled namespaces. Therefore,
   if you depend on a namespace in a dependency that is not AOT-compiled, it will
-  be AOT-compiled and bundled with the jar.
+  be AOT-compiled and bundled with the jar. It is strongly recommended not to
+  perform AOT other than during the creation of an uberjar.
 
 **Q:** I'd like to have certain config active only on a certain OS.  
 **A:** You can do this by using unquote in the `:dev` profile:
@@ -216,5 +209,47 @@ property.
 * You should also check your system clock and make sure the time is accurate; it's possible to run into SSL connection failures if your clock is way out of sync.
 * If it still doesn't work, please see if any of [these 'ssl' labelled issues](https://github.com/technomancy/leiningen/issues?utf8=%E2%9C%93&q=is%3Aissue%20label%3Assl%20) might help
 
+**Q:** I got `Tried to use insecure HTTP repository without TLS`, what is that about?  
+**A:** This means your project was configured to download dependencies
+from a repository that does not use TLS encryption. This is very
+insecure and exposes you to trivially-executed man-in-the-middle attacks.
+In the rare event that you don't care about the security of the machines
+running your project, you can re-enable support for unprotected repositories
+by putting this in your `project.clj` file:
+
+    ;; never do this
+    (require 'cemerick.pomegranate.aether)
+    (cemerick.pomegranate.aether/register-wagon-factory!
+     "http "#(org.apache.maven.wagon.providers.http.HttpWagon.))
+
+It's also possible you have a dependency which includes a reference to
+an insecure repository for retrieving its own dependencies. If this
+happens it is strongly recommended to add an `:exclusion` and report a
+bug with the dependency which does this.
+
 **Q:** `lein`/`lein.bat` won't download `leiningen-x.y.z-SNAPSHOT.jar`  
 **A:** You probably downloaded `lein`/`lein.bat` from the [master branch](https://github.com/technomancy/leiningen/tree/master/bin). Unless you plan to build leiningen yourself or help develop it, we suggest you use the latest stable version: [lein](https://raw.githubusercontent.com/technomancy/leiningen/stable/bin/lein)/[lein.bat](https://raw.githubusercontent.com/technomancy/leiningen/stable/bin/lein.bat)
+
+**Q:** What does `Unrecognized VM option 'UseCGroupMemoryLimitForHeap'` mean?  
+**A:** Leiningen 2.8.0 and up use this Java flag which provides better default
+memory settings when running in containerization. Older versions of Java do not
+support this flag. If you see this, it is *strongly* recommended that you upgrade
+Java, since the older versions have a large number of security flaws. If you
+cannot for some reason and don't care about security, you can add
+`:jvm-opts ^:replace []` to your `project.clj` file.
+
+**Q:** I have a dependency whose group ID and/or artifact ID starts with a
+  number (which is invalid for symbols in Clojure). How can I add it to my
+  project's dependencies?  
+**A:** As of version 2.7.2, Leiningen supports string dependency names like
+  this:
+
+```clj
+:dependencies [["net.3scale/3scale-api" "3.0.2"]]
+```
+
+Prior to version 2.7.2, this is the workaround:
+
+```clj
+:dependencies [[~(symbol "net.3scale" "3scale-api") "3.0.2"]]
+```

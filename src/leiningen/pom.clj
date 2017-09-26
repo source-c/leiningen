@@ -2,6 +2,7 @@
   "Write a pom.xml file to disk for Maven interoperability."
   (:import java.io.IOException)
   (:require [leiningen.core.main :as main]
+            [leiningen.core.utils :as utils]
             [leiningen.core.project :as project]
             [clojure.java.io :as io]
             [clojure.set :as set]
@@ -54,7 +55,7 @@
   (try
     (let [git-ref (sh/sh "git" "rev-parse" "HEAD" :dir git-dir)]
       (if (= (:exit git-ref) 0)
-        (:out git-ref)
+        (.trim (:out git-ref))
         (read-git-head-file git-dir)))
     (catch IOException e (read-git-head-file git-dir))))
 
@@ -160,11 +161,9 @@
                       [exclusion-spec]
                       exclusion-spec)]]
           [:exclusion (map (partial apply xml-tags)
-                           {:group-id (or (namespace dep)
-                                          (name dep))
-                            :artifact-id (name dep)
-                            :classifier classifier
-                            :type extension})])]))
+                           (merge (project/artifact-map dep)
+                                  {:classifier classifier
+                                   :type extension}))])]))
 
 (defmethod xml-tags ::dependency
   ([_ [dep version & {:keys [optional classifier
@@ -404,7 +403,7 @@
   ([project pom-location-or-properties]
      (let [pom (make-pom project true)
            pom-file (io/file (:root project) pom-location-or-properties)]
-       (.mkdirs (.getParentFile pom-file))
+       (utils/mkdirs (.getParentFile pom-file))
        (with-open [pom-writer (io/writer pom-file)]
          (.write pom-writer pom))
        (main/info "Wrote" (str pom-file))

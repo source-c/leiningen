@@ -36,11 +36,13 @@
                :eval-in :leiningen,
                :license {:name "Eclipse Public License"}
 
-               :dependencies '[[leiningen-core/leiningen-core "2.0.0-SNAPSHOT"]
+               :dependencies `[[leiningen-core/leiningen-core "2.0.0-SNAPSHOT"]
                                [clucy/clucy "0.2.2" :exclusions [[org.clojure/clojure]]]
                                [lancet/lancet "1.0.1"]
                                [robert/hooke "1.1.2"]
                                [stencil/stencil "0.2.0"]
+                               [~(symbol "net.3scale" "3scale-api") "3.0.2"]
+                               [clj-http/clj-http "3.4.1"]
                                [org.clojure/tools.nrepl "0.2.12"
                                 :exclusions [[org.clojure/clojure]]]
                                [clojure-complete/clojure-complete "0.2.4"
@@ -588,3 +590,26 @@
                 [["central" {:url "https://repo1.maven.org/maven2/"
                              :snapshots false}]
                  ["clojars" {:url "https://clojars.org/repo/"}]]}})))))))
+
+(deftest test-profile-scope-target-path
+  (let [project (with-meta
+                  {:target-path "target/%s"}
+                  {:profiles {:ab  [:a :b]
+                              :abc [:ab :c]
+                              :bcd [:b :c :d]
+                              :a   {}
+                              :b   {}
+                              :c   {}
+                              :d   {}
+                              :e   {}}})]
+    (are [ps tp] (= (profile-scope-target-path project ps) {:target-path tp})
+      [:a :b]       "target/ab"
+      [:a :b :c]    "target/abc"
+      [:b :c]       "target/b+c"
+      [:b :a]       "target/b+a"
+      [:c :b :a]    "target/c+b+a"
+      [:c :a :b]    "target/c+ab"
+      [:a :b :c :d] "target/abc+d"
+      [:e :b :c :d] "target/e+bcd"
+      [:c :a :b :d] "target/c+ab+d"
+      [:a]          "target/a")))

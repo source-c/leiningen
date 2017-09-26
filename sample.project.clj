@@ -42,6 +42,8 @@
   ;; to specify a prefix. This prefix is used to extract natives in
   ;; jars that don't adhere to the default "<os>/<arch>/" layout that
   ;; Leiningen expects.
+  ;; You can also strings like ["group-id/name" version] for instances
+  ;; where the dependency name isn't a valid symbol literal.
   :dependencies [[org.clojure/clojure "1.3.0"]
                  [org.jclouds/jclouds "1.0" :classifier "jdk15"]
                  [net.sf.ehcache/ehcache "2.3.1" :extension "pom"]
@@ -49,6 +51,7 @@
                                               [javax.jms/jms :classifier "*"]
                                               com.sun.jdmk/jmxtools
                                               com.sun.jmx/jmxri]]
+                 ["net.3scale/3scale-api" "3.0.2"]
                  [org.lwjgl.lwjgl/lwjgl "2.8.5"]
                  [org.lwjgl.lwjgl/lwjgl-platform "2.8.5"
                   :classifier "natives-osx"
@@ -71,10 +74,12 @@
   :managed-dependencies [[clj-time "0.12.0"]
                          [me.raynes/fs "1.4.6"]]
 
-  ;; What to do in the case of version issues. Defaults to :ranges, which
+  ;; What to do in the case of version conflicts. Defaults to :ranges, which
   ;; warns when version ranges are present anywhere in the dependency tree,
   ;; but can be set to true to warn for both ranges and overrides, or :abort
-  ;; to exit in the case of ranges or overrides.
+  ;; to exit in the case of ranges or overrides. Setting this will also warn
+  ;; you when plugins or their dependencies conflict with libraries used by
+  ;; Leiningen itself.
   :pedantic? :abort
   ;; Global exclusions are applied across the board, as an alternative
   ;; to duplication for multiple dependencies with the same excluded libraries.
@@ -91,8 +96,8 @@
   ;; :plugins and will also be available to deploy to.
   ;; Add ^:replace (:repositories ^:replace [...]) to only use repositories you
   ;; list below.
-  :repositories [["java.net" "http://download.java.net/maven/2"]
-                 ["sonatype" {:url "http://oss.sonatype.org/content/repositories/releases"
+  :repositories [["java.net" "https://download.java.net/maven/2"]
+                 ["sonatype" {:url "https://oss.sonatype.org/content/repositories/releases"
                               ;; If a repository contains releases only setting
                               ;; :snapshots to false will speed up dependencies.
                               :snapshots false
@@ -112,8 +117,8 @@
                  ;; Credentials for repositories should *not* be stored
                  ;; in project.clj but in ~/.lein/credentials.clj.gpg instead,
                  ;; see `lein help deploying` under "Authentication".
-                 ["snapshots" "http://blueant.com/archiva/snapshots"]
-                 ["releases" {:url "http://blueant.com/archiva/internal"
+                 ["snapshots" "https://blueant.com/archiva/snapshots"]
+                 ["releases" {:url "https://blueant.com/archiva/internal"
                               ;; Using :env as a value here will cause an
                               ;; environment variable to be used based on
                               ;; the key; in this case LEIN_PASSWORD.
@@ -329,17 +334,17 @@
   ;; compilation artifacts for namespaces that come from dependencies.
   :clean-non-project-classes true
   ;; Paths to include on the classpath from each project in the
-  ;; checkouts/ directory. (See the FAQ in the Readme for more details
-  ;; about checkout dependencies.) Set this to be a vector of
-  ;; functions that take the target project as argument. Defaults to
-  ;; [:source-paths :compile-path :resource-paths], but you could use
-  ;; the following to share code from the test suite:
+  ;; checkouts/ directory. (See the tutorial for more details about
+  ;; checkout dependencies.) Set this to be a vector of functions that
+  ;; take the target project as argument. Defaults to [:source-paths
+  ;; :compile-path :resource-paths], but you could use the following
+  ;; to share code from the test suite:
   :checkout-deps-shares [:source-paths :test-paths
                          ~(fn [p] (str (:root p) "/lib/dev/*"))]
 
 ;;; Testing
   ;; Predicates to determine whether to run a test or not, take test metadata
-  ;; as argument. See `lein help tutorial` for more information.
+  ;; as argument. See `lein help test` for more information.
   :test-selectors {:default (fn [m] (not (or (:integration m) (:regression m))))
                    :integration :integration
                    :regression :regression}
@@ -401,7 +406,10 @@
   :omit-source true
   ;; Files with names matching any of these patterns will be excluded from jars.
   :jar-exclusions [#"(?:^|/).svn/"]
-  ;; Same thing, but for uberjars.
+  ;; Files with names matching any of these patterns will included in the jar
+  ;; even if they'd be skipped otherwise.
+  :jar-inclusions [#"^\.ebextensions"]
+  ;; Same as :jar-exclusions, but for uberjars.
   :uberjar-exclusions [#"META-INF/DUMMY.SF"]
   ;; By default Leiningen will run a clean before creating jars to prevent
   ;; undeclared AOT from leaking to downstream consumers; this disables

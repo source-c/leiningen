@@ -25,7 +25,7 @@ separate install script.  Follow these instructions to install Leiningen manuall
 2. [Download the `lein` script from the `stable` branch](https://raw.githubusercontent.com/technomancy/leiningen/stable/bin/lein)
  of this project.
 3. Place it on your `$PATH`. (`~/bin` is a good choice if it is on your path.)
-4. Set it to be executable. (`chmod 755 ~/bin/lein`)
+4. Set it to be executable. (`chmod +x ~/bin/lein`)
 5. Run it.
 
 ### Windows
@@ -43,7 +43,7 @@ able to use the shell script above rather than the batch file.
 N.B.: Avoid using a LEIN_JAR environment variable.
 If you have one instance of Leiningen on your PATH as well as a LEIN_JAR
 pointing to a different instance, there is a known problem where `lein -v` and
-`lein update` will refer to the first instance, while usage of Leiningen, such
+`lein upgrade` will refer to the first instance, while usage of Leiningen, such
 as `lein new foobar`, will refer to the latter.
 
 ## Basic Usage
@@ -136,7 +136,7 @@ explains how to write plugins.
 
 ## License
 
-Source Copyright © 2009-2016 Phil Hagelberg, Alex Osborne, Dan Larkin, and
+Source Copyright © 2009-2017 Phil Hagelberg, Alex Osborne, Dan Larkin, and
 [contributors](https://github.com/technomancy/leiningen/contributors).
 Distributed under the Eclipse Public License, the same as Clojure
 uses. See the file COPYING.

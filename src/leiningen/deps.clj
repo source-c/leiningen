@@ -4,9 +4,10 @@
             [leiningen.core.main :as main]
             [leiningen.core.project :as project]
             [leiningen.core.user :as user]
+            [clojure.pprint :as pprint]
             [leiningen.core.utils :as utils]
             [cemerick.pomegranate.aether :as aether])
-  (:import (org.sonatype.aether.resolution DependencyResolutionException)))
+  (:import (org.eclipse.aether.resolution DependencyResolutionException)))
 
 (defn- walk-deps
   ([deps f level]
@@ -19,6 +20,21 @@
 
 (defn- print-dep [dep level]
   (println (apply str (repeat (* 2 level) \space)) (pr-str dep)))
+
+(defn- print-path [steps]
+  (doseq [[dep version level] steps]
+    (print-dep [dep version] level)))
+
+(defn- why-deps
+  ([deps target path]
+   (doseq [[[dep version] subdeps] deps]
+     (when (= target dep)
+       (doall (map-indexed #(println (apply str (repeat %1 "  ")) %2)
+                           (conj path [dep version]))))
+     (when subdeps
+       (why-deps subdeps target (conj path [dep version])))))
+  ([deps target]
+   (why-deps deps target [])))
 
 
 
@@ -67,6 +83,7 @@
   "A mapping from the tree-command to the dependency key it should print a tree
   for."
   {":tree" [:dependencies :managed-dependencies]
+   ":tree-data" [:dependencies :managed-dependencies]
    ":plugin-tree" [:plugins nil]})
 
 
@@ -79,6 +96,13 @@
 
 
 
+(defn query [project artifact version-string]
+  (->> (assoc project :query [[(symbol artifact) version-string]])
+       (classpath/get-dependencies :query nil)
+       keys first second println))
+
+
+
 (defn deps
   "Show details about dependencies.
 
@@ -86,6 +110,10 @@
 
 Show the full dependency tree for the current project. Each dependency is only
 shown once within a tree.
+
+    lein deps :tree-data
+
+Show the full dependency tree as above, but in EDN format.
 
     lein deps :plugin-tree
 
@@ -99,6 +127,17 @@ Check signatures of each dependency. ALPHA: subject to change.
 
 List the implicit middleware and hooks that will be activated by the current
 set of plugins. Useful for debugging unexplained behaviour.
+
+    lein deps :why org.clojure/core.logic
+
+Show just the path in the dependency tree directly relating to why a
+specific dependency has been included.
+
+    lein deps :query circleci/circleci.test 0.3.0-SNAPSHOT
+
+Look up the version number for a dependency in the remote repositories and
+print a resolved version. If omitted, the version defaults to \"RELEASE\". Can
+resolve SNAPSHOT versions to timestamps.
 
     lein deps
 
@@ -123,7 +162,11 @@ force them to be updated, use `lein -U $TASK`."
                               dependencies-key
                               managed-dependencies-key
                               project)]
-               (walk-deps hierarchy print-dep))
+               (case command
+                 ":tree" (walk-deps hierarchy print-dep)
+                 ":plugin-tree" (walk-deps hierarchy print-dep)
+                 ":tree-data"  (binding [*print-length* 10000 *print-level* 10000]
+                                 (pprint/pprint hierarchy))))
              (= command ":verify")
              (if (user/gpg-available?)
                (walk-deps (classpath/managed-dependency-hierarchy
@@ -133,7 +176,21 @@ force them to be updated, use `lein -U $TASK`."
                           (partial verify project))
                (main/abort (str "Could not verify - gpg not available.\n"
                                 "See `lein help gpg` for how to setup gpg.")))
-             :else (classpath/resolve-managed-dependencies
-                    :dependencies :managed-dependencies project))
+             (empty? command) (classpath/resolve-managed-dependencies
+                               :dependencies :managed-dependencies project)
+             :else (main/abort "Unknown deps command" command))
        (catch DependencyResolutionException e
-         (main/abort (.getMessage e))))))
+         (main/abort (.getMessage e)))))
+  ([project command target]
+   (cond (= command ":query")
+         (deps project command target "RELEASE")
+         (re-find #"^:why+$" command)
+         (why-deps (classpath/managed-dependency-hierarchy :dependencies
+                                                           :managed-dependencies
+                                                           project)
+                   (symbol target))
+         :else (main/abort "Unknown deps command" command)))
+  ([project command artifact version-string]
+   (when (not= ":query" command)
+     (main/abort "Unknown deps command" command))
+   (query project artifact version-string)))

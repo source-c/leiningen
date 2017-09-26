@@ -46,8 +46,12 @@
            (println "Error reading"
                    (.getName file)
                    "from"
-                   (.getParent file)))
-         (throw e)))))
+                   (.getParent file))
+           (if (zero? (.length file))
+             (println "File cannot be empty")
+             (if (.contains (.getMessage e) "EOF while reading")
+               (println "Invalid content was found")
+               (println (.getMessage e)))))))))
 
 (defn symlink?
   "Checks if a File is a symbolic link or points to another file."
@@ -58,6 +62,13 @@
                     (File. (.getName file))))]
     (not= (.getCanonicalFile canon)
           (.getAbsoluteFile canon))))
+
+(defn mkdirs
+  "Make a given directory and its parents, but throw an Exception on failure."
+  [f] ; whyyyyy does .mkdirs fail silently ugh
+  (let [already-exists? (.exists (io/file f))]
+    (when-not (or (.mkdirs (io/file f)) already-exists?)
+      (throw (Exception. (str "Couldn't create directories: " (io/file f)))))))
 
 (defn relativize
   "Makes the filepath path relative to base. Assumes base is an ancestor to
@@ -201,7 +212,7 @@
   (try
     (let [git-ref (sh/sh "git" "rev-parse" "HEAD" :dir git-dir)]
       (if (= (:exit git-ref) 0)
-        (:out git-ref)
+        (.trim (:out git-ref))
         (read-git-head-file git-dir)))
     (catch java.io.IOException e (read-git-head-file git-dir))))
 

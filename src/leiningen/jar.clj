@@ -90,14 +90,15 @@
   "Skips the file if it doesn't exist. If the file is not the
   root-file (specified by :path), will also skip it if it is a dotfile, emacs
   backup file or matches an exclusion pattern."
-  [file relative-path root-file patterns]
+  [file relative-path root-file exclusion-patterns inclusion-patterns]
   (or (not (.exists file))
       (and
        (not= file root-file)
+       (not (some #(re-find % relative-path) inclusion-patterns))
        (or
         (re-find #"^\.?#" (.getName file))
         (re-find #"~$" (.getName file))
-        (some #(re-find % relative-path) patterns)))))
+        (some #(re-find % relative-path) exclusion-patterns)))))
 
 (defmulti ^:private copy-to-jar (fn [project jar-os acc spec] (:type spec)))
 
@@ -139,7 +140,8 @@
                                  (full-path child (unix-path (str child)))
                                  root-dir-path)]]
                 (when-not (or (skip-file? child path root-file
-                                          (:jar-exclusions project))
+                                          (:jar-exclusions project)
+                                          (:jar-inclusions project))
                               (added-file? child path acc))
                   (put-jar-entry! jar-os child path)
                   path))]
@@ -197,8 +199,6 @@
                             (:group project) (:name project))
               :bytes (.getBytes (pom/make-pom project))}
              {:type :bytes :path (scope "project.clj")
-              :bytes (.getBytes (slurp (str (:root project) "/project.clj")))}
-             {:type :bytes :path "project.clj"
               :bytes (.getBytes (slurp (str (:root project) "/project.clj")))}]
             (for [doc (map (partial io/file (:root project))
                         (concat readmes licenses))
@@ -215,7 +215,7 @@
 
 ;; Split out backwards-compatibility. Collapse into get-jar-filename for 3.0
 (defn get-classified-jar-filename [project classifier]
-  (let [target (doto (io/file (:target-path project)) .mkdirs)
+  (let [target (doto (io/file (:target-path project)) utils/mkdirs)
         suffix (if classifier (str "-" (name classifier) ".jar") ".jar")
         name-kw (if (= classifier :standalone) :uberjar-name :jar-name)
         jar-name (or (project name-kw) (str (:name project) "-%s" suffix))

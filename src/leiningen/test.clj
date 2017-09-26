@@ -10,6 +10,18 @@
 
 (def ^:dynamic *exit-after-tests* true)
 
+;; This is a massive and terrible monkeypatch to work around the fact
+;; that the built-in clojure.test library does not accept patches from
+;; outside the core team. At this point the monkeypatching code below
+;; should be considered legacy, and rather than trying to improve it,
+;; all efforts should be instead directed towards improving external
+;; libraries such as https://github.com/circleci/circleci.test, which
+;; has a superset of these features and also doesn't require you to
+;; stop using clojure.test to write your tests.
+
+;; We recommend that projects override the test task with an alias
+;; that calls out to a third-party testing library instead.
+
 (def form-for-suppressing-unselected-tests
   "A function that figures out which vars need to be suppressed based on the
   given selectors, moves their :test metadata to :leiningen/skipped-test (so
@@ -117,9 +129,10 @@
             (spit ".lein-failures" (if ~*monkeypatch?*
                                      (pr-str @failures#)
                                      "#<disabled :monkeypatch-clojure-test>"))
-            (if ~*exit-after-tests*
-              (System/exit (+ (:error summary#) (:fail summary#)))
-              (+ (:error summary#) (:fail summary#))))))))
+            (let [total# (+ (int (:error summary#)) (int (:fail summary#)))]
+              (if ~*exit-after-tests*
+                (System/exit total#)
+                total#)))))))
 
 (defn- split-selectors [args]
   (let [[nses selectors] (split-with (complement keyword?) args)]

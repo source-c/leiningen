@@ -13,6 +13,7 @@
             [clojure.string :as string]
             [leiningen.core.eval :as eval]
             [leiningen.core.user :as user]
+            [leiningen.core.utils :as utils]
             [leiningen.core.main :as main]
             [stencil.core :as stencil])
   (:import (java.util Calendar)))
@@ -130,7 +131,7 @@
   "Create a renderer function that looks for mustache templates in the
   right place given the name of your template. If no data is passed, the
   file is simply slurped and the content returned unchanged.
-  
+
   render-fn - Optional rendering function that will be used in place of the
               default renderer. This allows rendering templates that contain
               tags that conflic with the Stencil renderer such as {{..}}."
@@ -145,7 +146,7 @@
           (main/abort (format "Template resource '%s' not found." path)))))))
 
 ;; We  provide a hier order function which returns  a function to generate
-;; binary resources such as images placed in `leiningen/new/<template>/` 
+;; binary resources such as images placed in `leiningen/new/<template>/`
 (defn raw-resourcer
   "Create a renderer function that looks for raw files in the
   right place given the name of your template."
@@ -191,11 +192,11 @@
     (if (or (= "." dir) (.mkdir (io/file dir)) *force?*)
       (doseq [path paths]
         (if (string? path)
-          (.mkdirs (template-path dir path data))
+          (utils/mkdirs (template-path dir path data))
           (let [[path content & options] path
                 path (template-path dir path data)
                 options (apply hash-map options)]
-            (.mkdirs (.getParentFile path))
+            (utils/mkdirs (.getParentFile path))
             (io/copy content (io/file path))
             (when (:executable options)
               (.setExecutable path true)))))

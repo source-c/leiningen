@@ -7,15 +7,16 @@
             [clojure.set :as set]
             [leiningen.core.user :as user]
             [leiningen.core.utils :as utils]
-            [pedantic.core :as pedantic])
+            [leiningen.core.pedantic :as pedantic])
   (:import (java.util.jar JarFile)
-           (org.sonatype.aether.graph Exclusion)
-           (org.sonatype.aether.resolution DependencyResolutionException)))
+           (org.eclipse.aether.resolution DependencyResolutionException)))
 
 (defn- warn [& args]
   ;; TODO: remove me once #1227 is merged
   (require 'leiningen.core.main)
   (apply (resolve 'leiningen.core.main/warn) args))
+
+(def ^:private warn-once (memoize warn))
 
 (defn ^:deprecated extract-native-deps [files native-path native-prefixes]
   (doseq [file files
@@ -27,8 +28,8 @@
           :when (.startsWith (.getName entry) native-prefix)]
     (let [f (io/file native-path (subs (.getName entry) (count native-prefix)))]
       (if (.isDirectory entry)
-        (.mkdirs f)
-        (do (.mkdirs (.getParentFile f))
+        (utils/mkdirs f)
+        (do (utils/mkdirs (.getParentFile f))
             (io/copy (.getInputStream jar entry) f))))))
 
 (defn extract-native-dep!
@@ -45,8 +46,8 @@
       (vreset! native? true)
       (let [f (io/file native-path (subs (.getName entry) (count native-prefix)))]
         (if (.isDirectory entry)
-          (.mkdirs f)
-          (do (.mkdirs (.getParentFile f))
+          (utils/mkdirs f)
+          (do (utils/mkdirs (.getParentFile f))
               (io/copy (.getInputStream jar entry) f)))))
     @native?))
 
@@ -165,7 +166,7 @@
         (warn "Could not read the old stale value for" identifier ", rerunning stale task"))
       (when (or (= ::error file-content)
                 (not= old-cmp-val cmp-val))
-        (.mkdirs (.getParentFile file))
+        (utils/mkdirs (.getParentFile file))
         (let [result (apply f outdated-val args)]
           (spit file (pr-str [cmp-val result]))
           result)))))
@@ -187,9 +188,19 @@
     (when (and (:name project) (:target-path project)
                (not= current-value old-value))
       (apply f args)
-      (.mkdirs (.getParentFile file))
+      (utils/mkdirs (.getParentFile file))
       (spit file (doall current-value))
       true)))
+
+;; The new version of aether (lein 2.8.0+) is more strict about authentication
+;; settings; it will ignore :passphrase if :private-key-file is not set.
+;; s3-wagon-private uses :passphrase, so if you've got a private s3 repo, we'll
+;; set :private-key-file to an empty string here so that aether will allow the
+;; wagon to see it instead of silently discarding it.
+(defn- hack-private-key [repo]
+  (if-not (re-find #"^s3p" (:url repo ""))
+    repo
+    (update repo :private-key-file #(or % ""))))
 
 (defn add-repo-auth
   "Repository credentials (a map containing some of
@@ -207,7 +218,7 @@
   would be applied to all repositories with URLs matching the regex key
   that didn't have an explicit entry."
   [[id repo]]
-  [id (-> repo user/profile-auth user/resolve-credentials)])
+  [id (-> repo user/profile-auth user/resolve-credentials hack-private-key)])
 
 (defn get-non-proxy-hosts []
   (let [system-no-proxy (System/getenv "no_proxy")
@@ -248,180 +259,80 @@
 (defn- root-cause [e]
   (last (take-while identity (iterate (memfn getCause) e))))
 
-(def ^:private get-dependencies-memoized
-  (memoize
-   (fn [dependencies-key managed-dependencies-key
-        {:keys [repositories local-repo offline? update
-                checksum mirrors] :as project}
-        {:keys [add-classpath? repository-session-fn] :as args}]
-     {:pre [(every? vector? (get project dependencies-key))
-            (every? vector? (get project managed-dependencies-key))]}
-     (try
-       ((if add-classpath?
-          pomegranate/add-dependencies
-          aether/resolve-dependencies)
-        :repository-session-fn repository-session-fn
-        :local-repo local-repo
-        :offline? offline?
-        :repositories (->> repositories
-                           (map add-repo-auth)
-                           (map (partial update-policies update checksum)))
-        :managed-coordinates (get project managed-dependencies-key)
-        :coordinates (get project dependencies-key)
-        :mirrors (->> mirrors
-                      (map add-repo-auth)
-                      (map (partial update-policies update checksum)))
-        :transfer-listener
-        (bound-fn [e]
-          (let [{:keys [type resource error]} e]
-            (let [{:keys [repository name size trace]} resource]
-              (let [aether-repos (if trace (.getRepositories (.getData trace)))]
-                (case type
-                  :started
-                  (if-let [repo (first (filter
-                                        #(or (= (.getUrl %) repository)
-                                             ;; sometimes the "base" url
-                                             ;; doesn't have a slash on it
-                                             (= (str (.getUrl %) "/") repository))
-                                        aether-repos))]
-                    (locking *err*
-                      (warn "Retrieving" name "from" (.getId repo)))
-                    ;; else case happens for metadata files
-                    )
-                  nil)))))
-        :proxy (get-proxy-settings))
-       (catch DependencyResolutionException e
-         ;; Cannot recur from catch/finally so have to put this in its own defn
-         (print-failures e)
-         (warn "This could be due to a typo in :dependencies or network issues.")
-         (warn "If you are behind a proxy, try setting the 'http_proxy' environment variable.")
-         (throw (ex-info "Could not resolve dependencies" {:suppress-msg true
-                                                           :exit-code 1} e)))
-       (catch Exception e
-         (if (and (instance? java.net.UnknownHostException (root-cause e))
-                  (not offline?))
-           (get-dependencies-memoized dependencies-key (assoc project :offline? true))
-           (throw e)))))))
+(def ^:private ^:dynamic *dependencies-session*
+  "This is dynamic in order to avoid memoization issues.")
 
-(defn- group-artifact [artifact]
-  (if (= (.getGroupId artifact)
-         (.getArtifactId artifact))
-    (.getGroupId artifact)
-    (str (.getGroupId artifact)
-         "/"
-         (.getArtifactId artifact))))
+(defn- get-dependencies*
+  [dependencies-key managed-dependencies-key
+   {:keys [repositories local-repo offline? update
+           checksum mirrors] :as project}
+   {:keys [add-classpath?] :as args}]
+  {:pre [(every? vector? (get project dependencies-key))
+         (every? vector? (get project managed-dependencies-key))]}
+  (try
+    ((if add-classpath?
+       pomegranate/add-dependencies
+       aether/resolve-dependencies)
+     :repository-session-fn *dependencies-session*
+     :local-repo local-repo
+     :offline? offline?
+     :repositories (->> repositories
+                        (map add-repo-auth)
+                        (map (partial update-policies update checksum)))
+     :managed-coordinates (get project managed-dependencies-key)
+     :coordinates (get project dependencies-key)
+     :mirrors (->> mirrors
+                   (map add-repo-auth)
+                   (map (partial update-policies update checksum)))
+     :transfer-listener
+     (bound-fn [e]
+       (let [{:keys [type resource error]} e]
+         (let [{:keys [repository name size trace]} resource]
+           (let [aether-repos (if trace (.getRepositories (.getData trace)))]
+             (case type
+               :started
+               (if-let [repo (first (filter
+                                     #(or (= (.getUrl %) repository)
+                                          ;; sometimes the "base" url
+                                          ;; doesn't have a slash on it
+                                          (= (str (.getUrl %) "/") repository))
+                                     aether-repos))]
+                 (locking *err*
+                   (warn "Retrieving" name "from" (.getId repo)))
+                 ;; else case happens for metadata files
+                 )
+               nil)))))
+     :proxy (get-proxy-settings))
+    (catch DependencyResolutionException e
+      ;; Cannot recur from catch/finally so have to put this in its own defn
+      (print-failures e)
+      (warn "This could be due to a typo in :dependencies, file system permissions, or network issues.")
+      (warn "If you are behind a proxy, try setting the 'http_proxy' environment variable.")
+      (throw (ex-info "Could not resolve dependencies" {:suppress-msg true
+                                                        :exit-code 1} e)))
+    (catch Exception e
+      (let [exception-cause (root-cause e)]
+        (if (and (or (instance? java.net.UnknownHostException exception-cause)
+                     (instance? java.net.NoRouteToHostException exception-cause))
+                 (not offline?))
+          (get-dependencies* dependencies-key managed-dependencies-key
+                             (assoc project :offline? true) args)
+          (throw e))))))
 
-(defn- dependency-str [dependency & [version]]
-  (if-let [artifact (and dependency (.getArtifact dependency))]
-    (str "["
-         (group-artifact artifact)
-         " \"" (or version (.getVersion artifact)) "\""
-         (if-let [classifier (.getClassifier artifact)]
-           (if (not (empty? classifier))
-             (str " :classifier \"" classifier "\"")))
-         (if-let [extension (.getExtension artifact)]
-           (if (not= extension "jar")
-             (str " :extension \"" extension "\"")))
-         (if-let [exclusions (seq (.getExclusions dependency))]
-           (str " :exclusions " (mapv (comp symbol group-artifact)
-                                      exclusions)))
-         "]")))
-
-(defn- message-for [path & [show-constraint?]]
-  (->> path
-       (map #(dependency-str (.getDependency %) (.getVersionConstraint %)))
-       (remove nil?)
-       (interpose " -> ")
-       (apply str)))
-
-(defn- message-for-version [{:keys [node parents]}]
-  (message-for (conj parents node)))
-
-(defn- exclusion-for-range [node parents]
-  (if-let [top-level (second parents)]
-    (let [excluded-artifact (.getArtifact (.getDependency node))
-          exclusion (Exclusion. (.getGroupId excluded-artifact)
-                      (.getArtifactId excluded-artifact) "*" "*")
-          exclusion-set (into #{exclusion} (.getExclusions
-                                             (.getDependency top-level)))
-          with-exclusion (.setExclusions (.getDependency top-level) exclusion-set)]
-      (dependency-str with-exclusion))
-    ""))
-
-(defn- message-for-range [{:keys [node parents]}]
-  (str (message-for (conj parents node) :constraints) "\n"
-       "Consider using "
-       (exclusion-for-range node parents) "."))
-
-(defn- exclusion-for-override [{:keys [node parents]}]
-  (exclusion-for-range node parents))
-
-(defn- message-for-override [{:keys [accepted ignoreds ranges]}]
-  {:accepted (message-for-version accepted)
-   :ignoreds (map message-for-version ignoreds)
-   :ranges (map message-for-range ranges)
-   :exclusions (map exclusion-for-override ignoreds)})
-
-(defn- pedantic-print-ranges [messages]
-  (when-not (empty? messages)
-    (warn "WARNING!!! version ranges found for:")
-    (doseq [dep-string messages]
-      (warn dep-string))
-    (warn)))
-
-(defn- pedantic-print-overrides [messages]
-  (when-not (empty? messages)
-    (warn "Possibly confusing dependencies found:")
-    (doseq [{:keys [accepted ignoreds ranges exclusions]} messages]
-      (warn accepted)
-      (warn " overrides")
-      (doseq [ignored (interpose " and" ignoreds)]
-        (warn ignored))
-      (when-not (empty? ranges)
-        (warn " possibly due to a version range in")
-        (doseq [r ranges]
-          (warn r)))
-      (warn "\nConsider using these exclusions:")
-      (doseq [ex (distinct exclusions)]
-        (warn ex))
-      (warn))))
-
-(alter-var-root #'pedantic-print-ranges memoize)
-(alter-var-root #'pedantic-print-overrides memoize)
-
-(defn- pedantic-do [pedantic-setting ranges overrides]
-  ;; Need to turn everything into a string before calling
-  ;; pedantic-print-*, otherwise we can't memoize due to bad equality
-  ;; semantics on aether GraphEdge objects.
-  (let [key (keyword pedantic-setting)
-        abort-or-true (#{true :abort} key)]
-    (when (and key (not= key :overrides))
-      (pedantic-print-ranges (distinct (map message-for-range ranges))))
-    (when (and key (not= key :ranges))
-      (pedantic-print-overrides (map message-for-override overrides)))
-    (when (and abort-or-true
-               (not (empty? (concat ranges overrides))))
-      (require 'leiningen.core.main)
-      ((resolve 'leiningen.core.main/abort) ; cyclic dependency =\
-       "Aborting due to :pedantic? :abort"))))
-
-(defn- pedantic-session [project ranges overrides]
-  (if (:pedantic? project)
-    #(-> % aether/repository-session
-         (pedantic/use-transformer ranges overrides))))
+(def ^:private get-dependencies-memoized (memoize get-dependencies*))
 
 (defn ^:internal get-dependencies [dependencies-key managed-dependencies-key
                                    project & args]
   (let [ranges (atom []), overrides (atom [])
-        session (pedantic-session project ranges overrides)
-        args (assoc (apply hash-map args) :repository-session-fn session)
         trimmed (select-keys project [dependencies-key managed-dependencies-key
-                                      :repositories :checksum :local-repo :offline?
-                                      :update :mirrors])
-        deps-result (get-dependencies-memoized dependencies-key
-                                               managed-dependencies-key
-                                               trimmed args)]
-    (pedantic-do (:pedantic? project) @ranges @overrides)
+                                      :repositories :checksum :local-repo
+                                      :offline? :update :mirrors :memoize-buster])
+        deps-result (binding [*dependencies-session* (pedantic/session
+                                                      project ranges overrides)]
+                      (get-dependencies-memoized dependencies-key
+                                                 managed-dependencies-key
+                                                 trimmed (apply hash-map args)))]
+    (pedantic/do (:pedantic? project) @ranges @overrides)
     deps-result))
 
 (defn- get-original-dependency
@@ -493,6 +404,27 @@
           (doseq [[_ {:keys [native-prefix file]}] snap-deps]
             (extract-native-dep! native-path file native-prefix))))))
 
+(def ^:private bootclasspath-deps (-> "leiningen/bootclasspath-deps.clj"
+                                      io/resource slurp read-string))
+
+(defn- warn-conflicts
+  "When using the bootclasspath (for boot speed), resources already on the
+  bootclasspath cannot be overridden by plugins, so notify the user about it."
+  [project dependencies]
+  (when (:pedantic? project)
+    (let [warned (atom false)]
+      (doseq [[artifact version] dependencies
+              :when (and (bootclasspath-deps artifact)
+                         (not= (bootclasspath-deps artifact) version))]
+        (reset! warned true)
+        (warn-once "Tried to load" artifact "version" version "but"
+                   (bootclasspath-deps artifact) "was already loaded."))
+      (when (and @warned
+                 (not (:root project))
+                 (not (:suppress-conflict-warnings project)))
+        (warn-once "You can set :eval-in :subprocess in your :user profile;"
+                   "however this will increase repl load time.")))))
+
 (defn resolve-managed-dependencies
   "Delegate dependencies to pomegranate. This will ensure they are
   downloaded into ~/.m2/repository and that native components of
@@ -511,6 +443,9 @@
         jars (->> dependencies-tree
                   (aether/dependency-files)
                   (filter #(re-find #"\.(jar|zip)$" (.getName %))))]
+    (when (some #{:add-classpath?} rest)
+      (warn-conflicts project (concat (keys dependencies-tree)
+                                      (reduce into (vals dependencies-tree)))))
     (when (and (= :dependencies dependencies-key)
                (:root project))
       (extract-native-dependencies project jars dependencies-tree))
@@ -616,20 +551,38 @@
         (resolve-managed-dependencies :dependencies :managed-dependencies)
         (map (memfn getAbsolutePath)))))
 
+(defn- visit-project!
+  "Records a visit to a project into the volatile `seen`, returning nil if the project has already been visited."
+  [seen {:keys [root] :as project}]
+  (when-not (@seen root)
+    (vswap! seen conj root)
+    project))
+
+(defn- project-paths
+  "Returns a function that applies each function in checkout-paths to a given project and returns a flattened list of
+  classpath entries."
+  [checkout-paths]
+  (if (seq checkout-paths)
+    (comp flatten (apply juxt checkout-paths))
+    (constantly nil)))
+
+(def ^:internal ^:dynamic *seen* nil)
+
 (defn ^:internal checkout-deps-paths
   "Checkout dependencies are used to place source for a dependency
   project directly on the classpath rather than having to install the
   dependency and restart the dependent project."
-  [project]
+  [{:keys [checkout-deps-shares root] :as project}]
   (require 'leiningen.core.project)
   (try
-    (let [checkout-paths (:checkout-deps-shares project)
-          checkouts ((resolve 'leiningen.core.project/read-checkouts) project)]
-      (mapcat (fn [checkout]
-                ;; can't mapcat here since :checkout-deps-shares points to
-                ;; vectors and strings
-                (flatten (map #(% checkout) checkout-paths)))
-              checkouts))
+    ;; This function needs to be re-entrant as it is one of the default members of `:checkout-deps-shares`.
+    ;; Use *seen* to communicate visit state between invocations.
+    (binding [*seen* (or *seen* (volatile! #{root}))]
+      ;; Visit each project and accumulate classpaths into a vector. This cannot be lazy as *seen* must be bound.
+      (into []
+            (comp (keep (partial visit-project! *seen*))
+                  (mapcat (project-paths checkout-deps-shares)))
+            ((resolve 'leiningen.core.project/read-checkouts) project)))
     (catch Exception e
       (throw (Exception. (format "Problem loading %s checkouts" project) e)))))
 

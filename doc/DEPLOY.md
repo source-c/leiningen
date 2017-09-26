@@ -71,7 +71,7 @@ N.B. SCP deploys to Clojars are no longer supported.
 If you don't already have a server running,
 [Amazon S3](https://aws.amazon.com/s3/) is a low-maintenance choice;
 you can deploy to S3 buckets using the
-[S3 wagon private](https://github.com/technomancy/s3-wagon-private) plugin.
+[S3 wagon private](https://github.com/s3-wagon-private/s3-wagon-private) plugin.
 
 ### Artifactory/Nexus/Archiva
 
@@ -323,6 +323,12 @@ default, the default is just an assumed convention among most Clojure
 libraries using Leiningen. Applications will have different requirements
 that are varied enough that Leiningen doesn't attempt to support them
 out of the box.
+
+### Committing
+
+By default, `["vcs" "commit"]` will commit with the message `"Version
+<version>"`. You can override that by passing a `format`-ready string
+to the task, like so: `["vcs" "commit" "Version %s [skip ci]"]`.
 
 ### Tagging
 
